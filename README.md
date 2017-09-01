@@ -8,4 +8,5 @@ This is a domain crawler that crawls whois information of domains.
 
 For example,
 
+    python3 whois_crawler.py google-10000-english-usa-no-swears-short.txt ai
     python3 whois_crawler.py google-10000-english-usa-no-swears-short.txt coin prefix com

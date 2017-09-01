@@ -1,0 +1,4 @@
+python-whois>=0.6.5
+PySocks>=1.6.7
+stem>=1.5.4
+pymongo>=3.5.1
