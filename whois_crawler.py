@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-from datetime import datetime
-import pymongo
+import queue
 import sys
 import threading
 import time
-import queue
-from whois import NICClient
+from datetime import datetime
+
+import pymongo
 import socks
 from stem import Signal
 from stem.control import Controller
 
+from whois import NICClient
 
 SCAN_INTERVAL = 180  # days
 
@@ -40,13 +41,29 @@ def change_ip():
 
 
 def is_valid(tld, text):
-    if text.find('For more information on Whois status codes') != -1:
+    if 'No match for' in text or 'not registered' in text or 'NOT FOUND' in text or 'Domain not found' in text:  # not registered
+        return False
+    elif 'For more information on Whois status codes' in text:
         return True
+    elif 'The registration of this domain is restricted' in text:
+        return True
+    elif 'in process of registration, try again later' in text:
+        return False
+
     if tld == 'ai' and text.startswith('DOMAIN INFORMATION'):
         return True
+    if tld == 'finance':
+        if (text.startswith('Domain Name:') or 'domain is available for purchase' in text):
+            return True
+        elif text.startswith('This name is reserved'):
+            return True
+        elif 'The registration of this domain is restricted' in text:
+            return False
+        else:
+            raise ValueError(text)
     if text.startswith('Reserved by Registry'):
         return True
-    return False
+    raise ValueError(text)
 
 
 def query(domain):
@@ -67,42 +84,31 @@ def query(domain):
         'port': 9050
     }}
     text = nic_client.whois_lookup(options, domain, 0)
+
     if 'limit exceeded' in text.lower() or len(text) < len(domain):
         print('whois limit exceeded, received: ' + text)
         change_ip()
         q.put(domain)
         return False
-    elif 'No match for' in text or 'not registered' in text or 'NOT FOUND' in text:  # not registered
-        if record is None:  # insert
-            db[target].insert({'_id': domain, 'registered': False, 'createdAt': datetime.now(), 'updatedAt': datetime.now()})
-        else:  # update
-            db[target].update({'_id': domain}, {'$set': {'registered': False, 'updatedAt': datetime.now(), 'rawInfo': None}})
-        print(domain + ' is not registered')
-        return False
-    elif is_valid(tld, text):
+
+    if record is None:  # insert
+        registered = is_valid(tld, text)
+
         pos = text.find('For more information on Whois status codes')
         if pos != -1:  # remove garbage text
             text = text[0 : pos]
-        if record is None:  # insert
-            info = {
-                '_id': domain,
-                'registered': True,
-                'createdAt': datetime.now(),
-                'updatedAt': datetime.now(),
-                'rawInfo': text
-            }
-            db[target].insert(info)
-        else:  # update
-            if (datetime.now() - record['updatedAt']).days > 30:  # last query was within 30 days
-                db[target].update({'_id': domain}, {'$set': {'registered': True, 'updatedAt': datetime.now(), 'rawInfo': text}})
-        print(domain + ' is registered, ' + text[: 60])
-        return True
-    elif 'in process of registration, try again later' in text:
-        print(text)
-        return False
-    else:
-        raise ValueError(text)
-        return False
+
+        info = {
+            '_id': domain,
+            'registered': registered,
+            'createdAt': datetime.now(),
+            'updatedAt': datetime.now(),
+            'rawInfo': text
+        }
+        db[target].insert_one(info)
+    else:  # update
+        if (datetime.now() - record['updatedAt']).days > 30:  # last query was within 30 days
+            db[target].update({'_id': domain}, {'$set': {'updatedAt': datetime.now()}})
 
 
 def query2(word_list, prefix_suffix, suffix=True, tld='com'):
