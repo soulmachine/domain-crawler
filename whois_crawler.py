@@ -2,6 +2,7 @@
 import logging
 import os
 import pytz
+import resource
 import subprocess
 import sys
 import threading
@@ -20,6 +21,10 @@ from whois import NICClient
 SCAN_INTERVAL = 180  # days
 
 db = get_db()
+
+# Raise the open file descriptor limit (macOS defaults to 256, too low for a crawler)
+soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, 8192), hard))
 
 NUM_THREADS = os.cpu_count()
 
@@ -136,23 +141,23 @@ def query_whois_socket(domain, tld, target, record):
         'host': SOCKS_PROXY['host'],
         'port': SOCKS_PROXY['port'],
     }}
-    text = nic_client.whois_lookup(options, domain, 0)
+    text = nic_client.whois_lookup(dict(), domain, 0)
 
-    if 'limit exceeded' in text.lower() or len(text) < len(domain):
+    if 'Rate limit exceeded' in text.lower() or len(text) < len(domain):
         logger.warning('whois limit exceeded, received: ' + text)
         change_ip()
         return False
 
     registered = is_valid(tld, text)
 
-    pos = text.find('For more information on Whois status codes')
+    pos = text.find('Last update of whois database')
     if pos != -1:
         text = text[0:pos]
 
     save_result(target, record, domain, registered=registered, raw_info=text)
 
 
-def query(domain):
+def query(domain, max_retries=3):
     domain = domain.lower()
     tld = domain[(domain.find('.') + 1):]
     target = tld + '_domains'
@@ -161,12 +166,20 @@ def query(domain):
         logger.info(f'{domain} already exists, skip querying')
         return False
 
-    logger.info('Querying ' + domain)
-
-    if tld == 'ai':
-        return query_ai_http(domain, target, record)
-    else:
-        return query_whois_socket(domain, tld, target, record)
+    for attempt in range(max_retries):
+        try:
+            logger.info('Querying ' + domain)
+            if tld == 'ai':
+                return query_ai_http(domain, target, record)
+            else:
+                return query_whois_socket(domain, tld, target, record)
+        except OSError as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                logger.warning('Retrying %s in %ds due to: %s', domain, wait, e)
+                time.sleep(wait)
+            else:
+                raise
 
 
 def query2(word_list, prefix_suffix, suffix=True, tld='com'):

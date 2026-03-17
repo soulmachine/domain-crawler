@@ -61,15 +61,8 @@ class SQLiteBackend(DBBackend):
     def __init__(self, db_path):
         self.db_path = db_path
         self._lock = threading.Lock()
-        self._ensure_db()
-
-    def _get_conn(self):
-        return sqlite3.connect(self.db_path, uri=True)
-
-    def _ensure_db(self):
-        """Create the database file if it doesn't exist."""
-        conn = self._get_conn()
-        conn.close()
+        self._conn = sqlite3.connect(self.db_path, uri=True, check_same_thread=False)
+        self._conn.execute('PRAGMA journal_mode=WAL')
 
     def _ensure_table(self, conn, target):
         conn.execute(
@@ -84,52 +77,40 @@ class SQLiteBackend(DBBackend):
 
     def get_record(self, target, domain):
         with self._lock:
-            conn = self._get_conn()
-            try:
-                self._ensure_table(conn, target)
-                row = conn.execute(
-                    f'SELECT domain, updated_at FROM [{target}] WHERE domain = ?',
-                    (domain,),
-                ).fetchone()
-                if row is None:
-                    return None
-                return {'_id': row[0], 'updatedAt': datetime.fromisoformat(row[1])}
-            finally:
-                conn.close()
+            self._ensure_table(self._conn, target)
+            row = self._conn.execute(
+                f'SELECT domain, updated_at FROM [{target}] WHERE domain = ?',
+                (domain,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {'_id': row[0], 'updatedAt': datetime.fromisoformat(row[1])}
 
     def insert(self, target, domain, registered, raw_info=None):
         now = datetime.now().isoformat()
         with self._lock:
-            conn = self._get_conn()
-            try:
-                self._ensure_table(conn, target)
-                conn.execute(
-                    f'INSERT INTO [{target}] (domain, registered, raw_info, created_at, updated_at)'
-                    f' VALUES (?, ?, ?, ?, ?)',
-                    (domain, int(registered), raw_info, now, now),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            self._ensure_table(self._conn, target)
+            self._conn.execute(
+                f'INSERT INTO [{target}] (domain, registered, raw_info, created_at, updated_at)'
+                f' VALUES (?, ?, ?, ?, ?)',
+                (domain, int(registered), raw_info, now, now),
+            )
+            self._conn.commit()
 
     def update(self, target, domain, registered, raw_info=None):
         now = datetime.now().isoformat()
         with self._lock:
-            conn = self._get_conn()
-            try:
-                self._ensure_table(conn, target)
-                if raw_info is not None:
-                    conn.execute(
-                        f'UPDATE [{target}] SET registered = ?, raw_info = ?, updated_at = ?'
-                        f' WHERE domain = ?',
-                        (int(registered), raw_info, now, domain),
-                    )
-                else:
-                    conn.execute(
-                        f'UPDATE [{target}] SET registered = ?, updated_at = ?'
-                        f' WHERE domain = ?',
-                        (int(registered), now, domain),
-                    )
-                conn.commit()
-            finally:
-                conn.close()
+            self._ensure_table(self._conn, target)
+            if raw_info is not None:
+                self._conn.execute(
+                    f'UPDATE [{target}] SET registered = ?, raw_info = ?, updated_at = ?'
+                    f' WHERE domain = ?',
+                    (int(registered), raw_info, now, domain),
+                )
+            else:
+                self._conn.execute(
+                    f'UPDATE [{target}] SET registered = ?, updated_at = ?'
+                    f' WHERE domain = ?',
+                    (int(registered), now, domain),
+                )
+            self._conn.commit()

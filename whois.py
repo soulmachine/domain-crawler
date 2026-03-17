@@ -90,6 +90,7 @@ class NICClient:
         there for contact details
         """
         response = b''
+        s = None
         try:
             if proxy:
                 s = socks.socksocket()
@@ -120,9 +121,11 @@ class NICClient:
                 response += d
                 if not d:
                     break
-            s.close()
         except socket.error as socketerror:
             print('Socket Error:', socketerror)
+        finally:
+            if s is not None:
+                s.close()
 
         nhost = None
         response = response.decode('utf-8', errors='replace')
