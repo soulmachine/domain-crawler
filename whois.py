@@ -26,14 +26,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
-from __future__ import print_function
-from __future__ import unicode_literals
-from __future__ import division
-from __future__ import absolute_import
-from future import standard_library
-standard_library.install_aliases()
-from builtins import *
-from builtins import object
 import re
 import sys
 import socket
@@ -41,7 +33,7 @@ import socks
 import optparse
 
 
-class NICClient(object):
+class NICClient:
 
     ABUSEHOST = "whois.abuse.net"
     NICHOST = "whois.crsnic.net"
@@ -76,7 +68,7 @@ class NICClient(object):
         whois server for getting contact details.
         """
         nhost = None
-        match = re.compile('Domain Name: ' + query + '\s*.*?Whois Server: (.*?)\s', flags=re.IGNORECASE|re.DOTALL).search(buf)
+        match = re.compile(r'Domain Name: ' + query + r'\s*.*?Whois Server: (.*?)\s', flags=re.IGNORECASE|re.DOTALL).search(buf)
         if match:
             nhost = match.groups()[0]
             # if the whois address is domain.tld/something then

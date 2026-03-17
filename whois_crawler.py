@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import logging
 import os
+import pytz
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import requests
@@ -25,6 +27,21 @@ change_ip_lock = threading.RLock()
 
 SOCKS_PROXY = {'host': 'localhost', 'port': 9050} # Can be override by the SOCKS_PROXY envrionment variable
 
+# Configure logging
+LOG_FILE = os.getenv('LOG_FILE', 'whois_crawler.log')
+# Setup logging with LA timezone
+logging.Formatter.converter = lambda self, t: datetime.fromtimestamp(t, tz=pytz.timezone('America/Los_Angeles')).timetuple()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE)
+    ]
+)
+logger = logging.getLogger(__name__)
+
 def change_ip():
     with change_ip_lock:
         with Controller.from_port(port=9051) as controller:
@@ -41,7 +58,7 @@ def should_skip(domain, record):
     if record is not None:
         days = (datetime.now() - record['updatedAt']).days
         if days < SCAN_INTERVAL:
-            print(domain + ' was already queried in recent %d days' % days)
+            logger.info(domain + ' was already queried in recent %d days' % days)
             return True
     return False
 
@@ -86,12 +103,15 @@ def query_ai_http(domain, target, record):
         'http': socks_url,
         'https': socks_url,
     }
+    # Equivalent to the command:
+    # curl --socks5 192.168.31.187:9050 -X POST "http://whois.nic.ai/" -d "Query=openclaw.ai&QueryType=Domain"
     r = requests.post(
-        'https://whois.ai/cgi-bin/newdomain.py',
-        data={'domain': domain},
-        verify=False,
+        'http://whois.nic.ai/',
+        data={'Query': domain, 'QueryType': 'Domain'},
         proxies=socks_proxies,
+        timeout=30,
     )
+    r.raise_for_status()
     if 'not registered' in r.text:
         save_result(target, record, domain, registered=False)
         return False
@@ -104,7 +124,7 @@ def query_ai_http(domain, target, record):
         save_result(target, record, domain, registered=True, raw_info=raw_info)
         return True
     else:
-        print('whois limit exceeded')
+        logger.warning('whois limit exceeded')
         change_ip()
         return False
 
@@ -120,7 +140,7 @@ def query_whois_socket(domain, tld, target, record):
     text = nic_client.whois_lookup(options, domain, 0)
 
     if 'limit exceeded' in text.lower() or len(text) < len(domain):
-        print('whois limit exceeded, received: ' + text)
+        logger.warning('whois limit exceeded, received: ' + text)
         change_ip()
         return False
 
@@ -139,9 +159,10 @@ def query(domain):
     target = tld + '_domains'
     record = get_record(target, domain)
     if should_skip(domain, record):
+        logger.info(f'{domain} already exists, skip querying')
         return False
 
-    print('Querying ' + domain)
+    logger.info('Querying ' + domain)
 
     if tld == 'ai':
         return query_ai_http(domain, target, record)
@@ -163,19 +184,24 @@ def query2(word_list, prefix_suffix, suffix=True, tld='com'):
         for word in word_list
     ]
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        executor.map(query, domains)
+        futures = [executor.submit(query, domain) for domain in domains]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logging.error("Query failed: %s", e)
 
 
 def main():
     global SOCKS_PROXY
-    proxy_str = os.environ.get('SOCKS_PROXY', 'localhost:9095')
+    proxy_str = os.environ.get('SOCKS_PROXY', 'localhost:9050')
     proxy_parts = proxy_str.rsplit(':', 1)
     if len(proxy_parts) != 2:
         raise ValueError('SOCKS_PROXY must be in host:port format')
     SOCKS_PROXY = {'host': proxy_parts[0], 'port': int(proxy_parts[1])}
 
     if 'DOMAIN_DB_URI' not in os.environ:
-        print('Warning: you can specify database URI via the DOMAIN_DB_URI environment variable')
+        logger.info('You can specify database URI via the DOMAIN_DB_URI environment variable')
 
     if len(sys.argv) != 5 and len(sys.argv) != 3:
         print(sys.argv[0] + ' <word_file> <tld> [prefix_suffix] [prefix | suffix]')

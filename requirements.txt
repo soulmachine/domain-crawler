@@ -3,5 +3,6 @@ lxml>=5.0.0
 python-whois>=0.9.6
 pymongo>=4.6.0
 PySocks>=1.7.1
+pytz>=2024.1
 requests>=2.31.0
 stem>=1.8.2
