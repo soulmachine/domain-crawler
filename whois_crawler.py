@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import sys
 import threading
 import time
@@ -22,8 +23,7 @@ NUM_THREADS = 1
 
 change_ip_lock = threading.RLock()
 
-SOCKS_PROXY = {'host': 'localhost', 'port': 9050}
-
+SOCKS_PROXY = {'host': 'localhost', 'port': 9050} # Can be override by the SOCKS_PROXY envrionment variable
 
 def change_ip():
     with change_ip_lock:
@@ -81,9 +81,10 @@ def is_valid(tld, text):
 
 def query_ai_http(domain, target, record):
     """Query .ai domains via HTTP scraping."""
+    socks_url = 'socks5://%s:%d' % (SOCKS_PROXY['host'], SOCKS_PROXY['port'])
     socks_proxies = {
-        'http': 'socks5://localhost:9050',
-        'https': 'socks5://localhost:9050',
+        'http': socks_url,
+        'https': socks_url,
     }
     r = requests.post(
         'https://whois.ai/cgi-bin/newdomain.py',
@@ -165,7 +166,17 @@ def query2(word_list, prefix_suffix, suffix=True, tld='com'):
         executor.map(query, domains)
 
 
-if __name__ == '__main__':
+def main():
+    global SOCKS_PROXY
+    proxy_str = os.environ.get('SOCKS_PROXY', 'localhost:9095')
+    proxy_parts = proxy_str.rsplit(':', 1)
+    if len(proxy_parts) != 2:
+        raise ValueError('SOCKS_PROXY must be in host:port format')
+    SOCKS_PROXY = {'host': proxy_parts[0], 'port': int(proxy_parts[1])}
+
+    if 'DOMAIN_DB_URI' not in os.environ:
+        print('Warning: you can specify database URI via the DOMAIN_DB_URI environment variable')
+
     if len(sys.argv) != 5 and len(sys.argv) != 3:
         print(sys.argv[0] + ' <word_file> <tld> [prefix_suffix] [prefix | suffix]')
         sys.exit(1)
@@ -180,3 +191,7 @@ if __name__ == '__main__':
     with open(sys.argv[1], 'r') as f:
         lines = [line.strip().lower() for line in f.readlines()]
     query2(lines, prefix_suffix, suffix, tld)
+
+
+if __name__ == '__main__':
+    main()

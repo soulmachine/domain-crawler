@@ -5,7 +5,8 @@ import threading
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-DOMAIN_DB_URI = os.environ.get('DOMAIN_DB_URI', 'mongodb://localhost:27017')
+# DOMAIN_DB_URI = os.environ.get('DOMAIN_DB_URI', 'mongodb://localhost:27017')
+DOMAIN_DB_URI = os.environ.get('DOMAIN_DB_URI', 'file:domains.sqlite')
 
 
 def get_db():
@@ -63,7 +64,7 @@ class SQLiteBackend(DBBackend):
         self._ensure_db()
 
     def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db_path, uri=True)
 
     def _ensure_db(self):
         """Create the database file if it doesn't exist."""
