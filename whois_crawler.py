@@ -1,39 +1,28 @@
 #!/usr/bin/env python3
-import queue
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-import pymongo
 import requests
 import socks
 from bs4 import BeautifulSoup
 from stem import Signal
 from stem.control import Controller
 
+from db import get_db
 from whois import NICClient
 
 SCAN_INTERVAL = 180  # days
 
-mongo_client = pymongo.MongoClient('localhost', 27017)
-db = mongo_client.domain
+db = get_db()
 
 NUM_THREADS = 1
-q = queue.Queue()
 
 change_ip_lock = threading.RLock()
 
 SOCKS_PROXY = {'host': 'localhost', 'port': 9050}
-
-
-def worker():
-    while True:
-        domain = q.get()
-        if domain is None:
-            break
-        query(domain)
-        q.task_done()
 
 
 def change_ip():
@@ -45,7 +34,7 @@ def change_ip():
 
 
 def get_record(target, domain):
-    return db[target].find_one({'_id': domain}, {'_id': 1, 'updatedAt': 1})
+    return db.get_record(target, domain)
 
 
 def should_skip(domain, record):
@@ -59,20 +48,9 @@ def should_skip(domain, record):
 
 def save_result(target, record, domain, registered, raw_info=None):
     if record is None:
-        info = {
-            '_id': domain,
-            'registered': registered,
-            'createdAt': datetime.now(),
-            'updatedAt': datetime.now(),
-        }
-        if raw_info is not None:
-            info['rawInfo'] = raw_info
-        db[target].insert_one(info)
+        db.insert(target, domain, registered, raw_info)
     else:
-        update_fields = {'registered': registered, 'updatedAt': datetime.now()}
-        if raw_info is not None:
-            update_fields['rawInfo'] = raw_info
-        db[target].update_one({'_id': domain}, {'$set': update_fields})
+        db.update(target, domain, registered, raw_info)
 
 
 def is_valid(tld, text):
@@ -127,7 +105,6 @@ def query_ai_http(domain, target, record):
     else:
         print('whois limit exceeded')
         change_ip()
-        q.put(domain)
         return False
 
 
@@ -144,7 +121,6 @@ def query_whois_socket(domain, tld, target, record):
     if 'limit exceeded' in text.lower() or len(text) < len(domain):
         print('whois limit exceeded, received: ' + text)
         change_ip()
-        q.put(domain)
         return False
 
     registered = is_valid(tld, text)
@@ -181,21 +157,12 @@ def query2(word_list, prefix_suffix, suffix=True, tld='com'):
       :param suffix: True by default
       :return: None
     """
-    threads = []
-    for i in range(NUM_THREADS):
-        t = threading.Thread(target=worker)
-        t.start()
-        threads.append(t)
-    for word in word_list:
-        domain = word + prefix_suffix + '.' + tld if suffix else prefix_suffix + word + '.' + tld
-        q.put(domain)
-    # block until all tasks are done
-    q.join()
-    # stop workers
-    for i in range(NUM_THREADS):
-        q.put(None)
-    for t in threads:
-        t.join()
+    domains = [
+        word + prefix_suffix + '.' + tld if suffix else prefix_suffix + word + '.' + tld
+        for word in word_list
+    ]
+    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
+        executor.map(query, domains)
 
 
 if __name__ == '__main__':
