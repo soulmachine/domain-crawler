@@ -2,13 +2,13 @@
 import logging
 import os
 import pytz
+import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-import requests
 import socks
 from bs4 import BeautifulSoup
 from stem import Signal
@@ -21,7 +21,7 @@ SCAN_INTERVAL = 180  # days
 
 db = get_db()
 
-NUM_THREADS = 1
+NUM_THREADS = os.cpu_count()
 
 change_ip_lock = threading.RLock()
 
@@ -97,26 +97,25 @@ def is_valid(tld, text):
 
 
 def query_ai_http(domain, target, record):
-    """Query .ai domains via HTTP scraping."""
-    socks_url = 'socks5://%s:%d' % (SOCKS_PROXY['host'], SOCKS_PROXY['port'])
-    socks_proxies = {
-        'http': socks_url,
-        'https': socks_url,
-    }
+    """Query .ai domains via HTTP scraping using curl through SOCKS proxy."""
     # Equivalent to the command:
     # curl --socks5 192.168.31.187:9050 -X POST "http://whois.nic.ai/" -d "Query=openclaw.ai&QueryType=Domain"
-    r = requests.post(
-        'http://whois.nic.ai/',
-        data={'Query': domain, 'QueryType': 'Domain'},
-        proxies=socks_proxies,
-        timeout=30,
+    result = subprocess.run(
+        [
+            'curl', '--socks5', '%s:%d' % (SOCKS_PROXY['host'], SOCKS_PROXY['port']),
+            '-s', '-X', 'POST', 'http://whois.nic.ai/',
+            '-d', 'Query=%s&QueryType=Domain' % domain,
+        ],
+        capture_output=True, text=True, timeout=30,
     )
-    r.raise_for_status()
-    if 'not registered' in r.text:
+    if result.returncode != 0:
+        raise RuntimeError('curl failed: ' + result.stderr)
+    html = result.stdout
+    if 'Domain not found' in html:
         save_result(target, record, domain, registered=False)
         return False
-    elif 'already registered' in r.text:
-        soup = BeautifulSoup(r.content, 'lxml')
+    elif 'Registry Domain ID' in html:
+        soup = BeautifulSoup(html, 'lxml')
         raw_info = None
         tmp = soup.select('table pre')
         if len(tmp) > 0:
@@ -124,7 +123,7 @@ def query_ai_http(domain, target, record):
         save_result(target, record, domain, registered=True, raw_info=raw_info)
         return True
     else:
-        logger.warning('whois limit exceeded')
+        logger.warning(html)
         change_ip()
         return False
 
