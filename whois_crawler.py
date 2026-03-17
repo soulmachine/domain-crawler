@@ -6,7 +6,9 @@ import time
 from datetime import datetime
 
 import pymongo
+import requests
 import socks
+from bs4 import BeautifulSoup
 from stem import Signal
 from stem.control import Controller
 
@@ -22,6 +24,8 @@ q = queue.Queue()
 
 change_ip_lock = threading.RLock()
 
+SOCKS_PROXY = {'host': 'localhost', 'port': 9050}
+
 
 def worker():
     while True:
@@ -34,10 +38,41 @@ def worker():
 
 def change_ip():
     with change_ip_lock:
-        with Controller.from_port(port = 9051) as controller:
-            controller.authenticate(password = 'tor123456')
+        with Controller.from_port(port=9051) as controller:
+            controller.authenticate(password='tor123456')
             controller.signal(Signal.NEWNYM)
         time.sleep(5)  # wait for the tor node
+
+
+def get_record(target, domain):
+    return db[target].find_one({'_id': domain}, {'_id': 1, 'updatedAt': 1})
+
+
+def should_skip(domain, record):
+    if record is not None:
+        days = (datetime.now() - record['updatedAt']).days
+        if days < SCAN_INTERVAL:
+            print(domain + ' was already queried in recent %d days' % days)
+            return True
+    return False
+
+
+def save_result(target, record, domain, registered, raw_info=None):
+    if record is None:
+        info = {
+            '_id': domain,
+            'registered': registered,
+            'createdAt': datetime.now(),
+            'updatedAt': datetime.now(),
+        }
+        if raw_info is not None:
+            info['rawInfo'] = raw_info
+        db[target].insert_one(info)
+    else:
+        update_fields = {'registered': registered, 'updatedAt': datetime.now()}
+        if raw_info is not None:
+            update_fields['rawInfo'] = raw_info
+        db[target].update_one({'_id': domain}, {'$set': update_fields})
 
 
 def is_valid(tld, text):
@@ -66,22 +101,43 @@ def is_valid(tld, text):
     raise ValueError(text)
 
 
-def query(domain):
-    domain = domain.lower()
-    tld = domain[(domain.find('.') + 1):]
-    target = tld + '_domains'
-    record = db[target].find_one({'_id': domain}, {'_id': 1, 'updatedAt': 1})
-    if record is not None:  # existed
-        days = (datetime.now() - record['updatedAt']).days
-        if days < SCAN_INTERVAL:  # last query was within SCAN_INTERVAL days
-            print(domain + ' was already queried in recent %d days' % days)
-            return False
-    print('Querying ' + domain)
+def query_ai_http(domain, target, record):
+    """Query .ai domains via HTTP scraping."""
+    socks_proxies = {
+        'http': 'socks5://localhost:9050',
+        'https': 'socks5://localhost:9050',
+    }
+    r = requests.post(
+        'https://whois.ai/cgi-bin/newdomain.py',
+        data={'domain': domain},
+        verify=False,
+        proxies=socks_proxies,
+    )
+    if 'not registered' in r.text:
+        save_result(target, record, domain, registered=False)
+        return False
+    elif 'already registered' in r.text:
+        soup = BeautifulSoup(r.content, 'lxml')
+        raw_info = None
+        tmp = soup.select('table pre')
+        if len(tmp) > 0:
+            raw_info = tmp[0].text
+        save_result(target, record, domain, registered=True, raw_info=raw_info)
+        return True
+    else:
+        print('whois limit exceeded')
+        change_ip()
+        q.put(domain)
+        return False
+
+
+def query_whois_socket(domain, tld, target, record):
+    """Query domains via socket-based whois."""
     nic_client = NICClient()
     options = {'proxy': {
         'type': socks.SOCKS5,
-        'host': 'localhost',
-        'port': 9050
+        'host': SOCKS_PROXY['host'],
+        'port': SOCKS_PROXY['port'],
     }}
     text = nic_client.whois_lookup(options, domain, 0)
 
@@ -91,24 +147,29 @@ def query(domain):
         q.put(domain)
         return False
 
-    if record is None:  # insert
-        registered = is_valid(tld, text)
+    registered = is_valid(tld, text)
 
-        pos = text.find('For more information on Whois status codes')
-        if pos != -1:  # remove garbage text
-            text = text[0 : pos]
+    pos = text.find('For more information on Whois status codes')
+    if pos != -1:
+        text = text[0:pos]
 
-        info = {
-            '_id': domain,
-            'registered': registered,
-            'createdAt': datetime.now(),
-            'updatedAt': datetime.now(),
-            'rawInfo': text
-        }
-        db[target].insert_one(info)
-    else:  # update
-        if (datetime.now() - record['updatedAt']).days > 30:  # last query was within 30 days
-            db[target].update({'_id': domain}, {'$set': {'updatedAt': datetime.now()}})
+    save_result(target, record, domain, registered=registered, raw_info=text)
+
+
+def query(domain):
+    domain = domain.lower()
+    tld = domain[(domain.find('.') + 1):]
+    target = tld + '_domains'
+    record = get_record(target, domain)
+    if should_skip(domain, record):
+        return False
+
+    print('Querying ' + domain)
+
+    if tld == 'ai':
+        return query_ai_http(domain, target, record)
+    else:
+        return query_whois_socket(domain, tld, target, record)
 
 
 def query2(word_list, prefix_suffix, suffix=True, tld='com'):
