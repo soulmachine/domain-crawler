@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Read unregistered .ai domains from domains.sqlite and rank them by estimated value."""
+"""Read unregistered domains from domains.sqlite and rank them by estimated value."""
 
+import argparse
 import sqlite3
 import re
 
@@ -25,9 +26,9 @@ STOPWORDS = {
     "page", "name", "year", "view",
 }
 
-# Premium prefixes — evocative words that pair great with "claw"
+# Premium prefixes — evocative words that make strong brand names
 PREMIUM_PREFIXES = {
-    # Animals / predators (natural pairing with "claw")
+    # Animals / predators
     "bear", "wolf", "lion", "hawk", "eagle", "tiger", "dragon",
     "cat", "fox", "bat", "ape", "owl", "ram", "elk",
     # Power / aggression
@@ -54,12 +55,12 @@ except FileNotFoundError:
     pass
 
 
-def score_domain(domain: str) -> float:
+def score_domain(domain: str, tld: str, suffix: str | None = None) -> float:
     """Score a domain. Higher = more valuable."""
-    name = domain.removesuffix(".ai").lower()
+    name = domain.removesuffix(f".{tld}").lower()
 
-    if name.endswith("claw"):
-        prefix = name[:-4]
+    if suffix and name.endswith(suffix):
+        prefix = name[:-len(suffix)]
     else:
         prefix = name
 
@@ -78,7 +79,7 @@ def score_domain(domain: str) -> float:
     if prefix in STOPWORDS:
         score -= 40
 
-    # 3) Premium prefix bonus (pairs well with "claw")
+    # 3) Premium prefix bonus
     if prefix in PREMIUM_PREFIXES:
         score += 35
 
@@ -112,8 +113,8 @@ def score_domain(domain: str) -> float:
     elif plen > 0 and 0.25 <= vowels / plen <= 0.6:
         score += 5
 
-    # 5) Penalize awkward combinations with "claw"
-    if prefix.endswith(("aw", "ow", "law", "claw")):
+    # 5) Penalize awkward combinations with suffix
+    if suffix and prefix.endswith(("aw", "ow", "law", suffix)):
         score -= 10
 
     # 6) Penalize numbers and hyphens
@@ -126,22 +127,30 @@ def score_domain(domain: str) -> float:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Rank unregistered domains by estimated value.")
+    parser.add_argument("tld", help="Top-level domain (e.g. ai, io, com)")
+    parser.add_argument("--suffix", default=None, help="Suffix to strip from domain names for scoring (e.g. claw)")
+    args = parser.parse_args()
+    tld = args.tld.lstrip(".")
+    suffix = args.suffix
+    table_name = f"{tld}_domains"
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.execute(
-        "SELECT domain FROM ai_domains WHERE registered = 0"
+        f"SELECT domain FROM {table_name} WHERE registered = 0"
     )
     domains = [row[0] for row in cursor.fetchall()]
     conn.close()
 
-    ranked = sorted(domains, key=score_domain, reverse=True)
+    ranked = sorted(domains, key=lambda d: score_domain(d, tld, suffix), reverse=True)
 
-    print(f"Total unregistered .ai domains: {len(ranked)}\n")
+    print(f"Total unregistered .{tld} domains: {len(ranked)}\n")
     print(f"{'Rank':<6} {'Domain':<25} {'Prefix':<15} {'Score':>8}")
     print("-" * 56)
     for i, domain in enumerate(ranked[:50], 1):
-        name = domain.removesuffix(".ai")
-        prefix = name[:-4] if name.endswith("claw") else name
-        s = score_domain(domain)
+        name = domain.removesuffix(f".{tld}")
+        prefix = name[:-len(suffix)] if suffix and name.endswith(suffix) else name
+        s = score_domain(domain, tld, suffix)
         print(f"{i:<6} {domain:<25} {prefix:<15} {s:>8.1f}")
 
 
