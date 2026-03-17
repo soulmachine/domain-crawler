@@ -117,7 +117,7 @@ def query_ai_http(domain, target, record):
     elif 'Registry Domain ID' in html:
         soup = BeautifulSoup(html, 'lxml')
         raw_info = None
-        tmp = soup.select('table pre')
+        tmp = soup.select('pre.whoisContent')
         if len(tmp) > 0:
             raw_info = tmp[0].text
         save_result(target, record, domain, registered=True, raw_info=raw_info)
