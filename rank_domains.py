@@ -55,14 +55,18 @@ except FileNotFoundError:
     pass
 
 
-def score_domain(domain: str, tld: str, suffix: str | None = None) -> float:
+def score_domain(domain: str, tld: str, suffix: str | None = None, prefix: str | None = None) -> float:
     """Score a domain. Higher = more valuable."""
     name = domain.removesuffix(f".{tld}").lower()
 
     if suffix and name.endswith(suffix):
-        prefix = name[:-len(suffix)]
+        root = name[:-len(suffix)]
+    elif prefix and name.startswith(prefix):
+        root = name[len(prefix):]
     else:
-        prefix = name
+        root = name
+
+    prefix = root  # local scoring variable
 
     if not prefix:
         return 0.0
@@ -128,11 +132,14 @@ def score_domain(domain: str, tld: str, suffix: str | None = None) -> float:
 
 def main():
     parser = argparse.ArgumentParser(description="Rank unregistered domains by estimated value.")
-    parser.add_argument("tld", help="Top-level domain (e.g. ai, io, com)")
-    parser.add_argument("--suffix", default=None, help="Suffix to strip from domain names for scoring (e.g. claw)")
+    parser.add_argument("--tld", required=True, help="Top-level domain (e.g. ai, io, com)")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--suffix", help="Suffix to strip from domain names for scoring (e.g. claw)")
+    group.add_argument("--prefix", help="Prefix to strip from domain names for scoring (e.g. claw)")
     args = parser.parse_args()
     tld = args.tld.lstrip(".")
     suffix = args.suffix
+    prefix = args.prefix
     table_name = f"{tld}_domains"
 
     conn = sqlite3.connect(DB_PATH)
@@ -142,16 +149,21 @@ def main():
     domains = [row[0] for row in cursor.fetchall()]
     conn.close()
 
-    ranked = sorted(domains, key=lambda d: score_domain(d, tld, suffix), reverse=True)
+    ranked = sorted(domains, key=lambda d: score_domain(d, tld, suffix, prefix), reverse=True)
 
     print(f"Total unregistered .{tld} domains: {len(ranked)}\n")
-    print(f"{'Rank':<6} {'Domain':<25} {'Prefix':<15} {'Score':>8}")
+    print(f"{'Rank':<6} {'Domain':<25} {'Root':<15} {'Score':>8}")
     print("-" * 56)
     for i, domain in enumerate(ranked[:50], 1):
         name = domain.removesuffix(f".{tld}")
-        prefix = name[:-len(suffix)] if suffix and name.endswith(suffix) else name
-        s = score_domain(domain, tld, suffix)
-        print(f"{i:<6} {domain:<25} {prefix:<15} {s:>8.1f}")
+        if suffix and name.endswith(suffix):
+            root = name[:-len(suffix)]
+        elif prefix and name.startswith(prefix):
+            root = name[len(prefix):]
+        else:
+            root = name
+        s = score_domain(domain, tld, suffix, prefix)
+        print(f"{i:<6} {domain:<25} {root:<15} {s:>8.1f}")
 
 
 if __name__ == "__main__":
