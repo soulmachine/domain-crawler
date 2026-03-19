@@ -141,7 +141,7 @@ def query_whois_socket(domain, tld, target, record):
         'host': SOCKS_PROXY['host'],
         'port': SOCKS_PROXY['port'],
     }}
-    text = nic_client.whois_lookup(dict(), domain, 0)
+    text = nic_client.whois_lookup(options, domain, 0)
 
     if 'Rate limit exceeded' in text.lower() or len(text) < len(domain):
         logger.warning('whois limit exceeded, received: ' + text)
