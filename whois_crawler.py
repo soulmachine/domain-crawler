@@ -75,8 +75,10 @@ def save_result(target, record, domain, registered, raw_info=None):
         db.update(target, domain, registered, raw_info)
 
 
-def is_valid(tld, text):
-    if 'No match for' in text or 'not registered' in text or 'NOT FOUND' in text or 'Domain not found' in text:  # not registered
+def is_registered(tld, text):
+    if 'Registry Domain ID' in text:
+        return True
+    elif 'No match for' in text or 'not registered' in text or 'NOT FOUND' in text or 'Domain not found' in text:  # not registered
         return False
     elif 'For more information on Whois status codes' in text:
         return True
@@ -87,7 +89,7 @@ def is_valid(tld, text):
 
     if tld == 'ai' and text.startswith('DOMAIN INFORMATION'):
         return True
-    if tld == 'finance':
+    elif tld == 'finance':
         if (text.startswith('Domain Name:') or 'domain is available for purchase' in text):
             return True
         elif text.startswith('This name is reserved'):
@@ -96,7 +98,7 @@ def is_valid(tld, text):
             return False
         else:
             raise ValueError(text)
-    if text.startswith('Reserved by Registry'):
+    elif text.startswith('Reserved by Registry'):
         return True
     raise ValueError(text)
 
@@ -148,7 +150,7 @@ def query_whois_socket(domain, tld, target, record):
         change_ip()
         return False
 
-    registered = is_valid(tld, text)
+    registered = is_registered(tld, text)
 
     pos = text.find('Last update of whois database')
     if pos != -1:
