@@ -25,3 +25,9 @@ At last, start the crawler,
 python3 whois_crawler.py google-10000-english-usa-no-swears-short.txt ai
 python3 whois_crawler.py google-10000-english-usa-no-swears-short.txt coin prefix com
 ```
+
+## domain_variants.py
+
+```bash
+python domain_variants.py --words google-10000-english/google-10000-english-usa-no-swears-short.txt --top 100 --len 5
+```
